@@ -11,6 +11,61 @@ type ChatCompletionChunk = {
   }>;
 };
 
+type ChatCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+};
+
+function getLlmConfig(model: string) {
+  return {
+    model,
+    messages: [] as ChatMessage[],
+    stream: false,
+    temperature: 0.2,
+  };
+}
+
+export async function completeChat(
+  messages: ChatMessage[],
+  model = process.env.LLM_FAST_MODEL || process.env.LLM_MODEL,
+  signal?: AbortSignal,
+): Promise<string> {
+  const body = getLlmConfig(model ?? "");
+  body.messages = messages;
+
+  const response = await fetch(
+    `${process.env.LLM_BASE_URL}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.LLM_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal,
+    },
+  );
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error(
+        "The AI provider's rate limit was hit. Wait a minute and try again.",
+      );
+    }
+
+    const responseBody = (await response.text()).slice(0, 300);
+    throw new Error(
+      `AI provider request failed with status ${response.status}: ${responseBody}`,
+    );
+  }
+
+  const data = (await response.json()) as ChatCompletionResponse;
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
 export async function* streamChat(
   messages: ChatMessage[],
   signal?: AbortSignal,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import Answer from "@/components/Answer";
 import SearchBox from "@/components/SearchBox";
@@ -14,36 +14,58 @@ const suggestions = [
   "Explain quantum computing simply",
 ];
 
+type Turn = {
+  question: string;
+  sources: Source[];
+  answer: string;
+  related: string[];
+  error: string;
+};
+
 type StreamEvent =
   | { type: "sources"; sources: Source[] }
   | { type: "token"; text: string }
+  | { type: "related"; questions: string[] }
   | { type: "error"; message: string }
   | { type: "done" };
 
+function emptyTurn(question: string): Turn {
+  return { question, sources: [], answer: "", related: [], error: "" };
+}
+
 export default function TurnView() {
   const [input, setInput] = useState("");
-  const [question, setQuestion] = useState("");
-  const [sources, setSources] = useState<Source[]>([]);
-  const [answer, setAnswer] = useState("");
-  const [error, setError] = useState("");
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   async function ask(nextQuestion = input) {
     const query = nextQuestion.trim();
     if (!query || busy) return;
 
+    const history = turns
+      .filter((turn) => turn.answer)
+      .slice(-2)
+      .map((turn) => ({ question: turn.question, answer: turn.answer }));
+    const turnIndex = turns.length;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setInput("");
-    setQuestion(query);
-    setSources([]);
-    setAnswer("");
-    setError("");
+    setTurns((current) => [...current, emptyTurn(query)]);
     setBusy(true);
+
+    function updateTurn(update: (turn: Turn) => Turn) {
+      setTurns((current) =>
+        current.map((turn, index) => (index === turnIndex ? update(turn) : turn)),
+      );
+    }
 
     try {
       const response = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, ...(history.length ? { history } : {}) }),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -64,29 +86,47 @@ export default function TurnView() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const event = JSON.parse(line) as StreamEvent;
-          if (event.type === "sources") setSources(event.sources);
-          if (event.type === "token") setAnswer((current) => current + event.text);
-          if (event.type === "error") setError(event.message);
+          if (event.type === "sources") {
+            updateTurn((turn) => ({ ...turn, sources: event.sources }));
+          }
+          if (event.type === "token") {
+            updateTurn((turn) => ({ ...turn, answer: turn.answer + event.text }));
+          }
+          if (event.type === "related") {
+            updateTurn((turn) => ({ ...turn, related: event.questions }));
+          }
+          if (event.type === "error") {
+            updateTurn((turn) => ({ ...turn, error: event.message }));
+          }
         }
 
         if (done) break;
       }
     } catch (streamError: unknown) {
-      setError(streamError instanceof Error ? streamError.message : "Something went wrong.");
+      if (!controller.signal.aborted) {
+        updateTurn((turn) => ({
+          ...turn,
+          error: streamError instanceof Error ? streamError.message : "Something went wrong.",
+        }));
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
   }
 
-  function reset() {
-    setInput("");
-    setQuestion("");
-    setSources([]);
-    setAnswer("");
-    setError("");
+  function stop() {
+    abortRef.current?.abort();
   }
 
-  if (!question) {
+  function reset() {
+    stop();
+    setInput("");
+    setTurns([]);
+    setBusy(false);
+  }
+
+  if (!turns.length) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center px-5 py-12">
         <div className="w-full max-w-2xl text-center">
@@ -118,7 +158,7 @@ export default function TurnView() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-4">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-5 py-4">
           <button type="button" onClick={reset} className="flex items-center gap-2 text-xl font-semibold tracking-[-0.05em]">
             <span className="size-2.5 rounded-full bg-accent" />
             lucid
@@ -133,48 +173,80 @@ export default function TurnView() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-5 pt-12 pb-36">
-        <h1 className="max-w-3xl text-3xl leading-tight font-semibold tracking-[-0.035em] sm:text-4xl">
-          {question}
-        </h1>
+      <main className="mx-auto w-full max-w-3xl px-5 pt-16 pb-36">
+        {turns.map((turn, index) => {
+          const isLatest = index === turns.length - 1;
+          const loading = isLatest && busy && !turn.sources.length;
+          return (
+            <article key={`${turn.question}-${index}`} className={index ? "mt-16 border-t pt-12" : ""}>
+              <h1 className="max-w-3xl text-3xl leading-tight font-semibold tracking-[-0.035em] sm:text-4xl">
+                {turn.question}
+              </h1>
 
-        <section className="mt-10" aria-labelledby="sources-heading">
-          <div className="mb-4 flex items-center gap-3">
-            <h2 id="sources-heading" className="text-sm font-semibold tracking-wide text-muted uppercase">
-              Sources
-            </h2>
-            <span className="h-px flex-1 bg-border" />
-          </div>
-          <Sources sources={sources} loading={busy && sources.length === 0} />
-        </section>
+              <section className="mt-10" aria-labelledby={`sources-heading-${index}`}>
+                <div className="mb-4 flex items-center gap-3">
+                  <h2 id={`sources-heading-${index}`} className="text-sm font-semibold tracking-wide text-muted uppercase">
+                    Sources
+                  </h2>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+                <Sources sources={turn.sources} loading={loading} />
+              </section>
 
-        <section className="mt-12" aria-labelledby="answer-heading">
-          <div className="mb-4 flex items-center gap-3">
-            <h2 id="answer-heading" className="text-sm font-semibold tracking-wide text-muted uppercase">
-              Answer
-            </h2>
-            {busy && <span className="size-2 animate-pulse rounded-full bg-accent" />}
-            <span className="h-px flex-1 bg-border" />
-          </div>
-          {error ? (
-            <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-              {error}
-            </div>
-          ) : answer ? (
-            <Answer text={answer} sources={sources} />
-          ) : (
-            <div className="space-y-3" aria-label="Loading answer">
-              <div className="h-4 w-11/12 animate-pulse rounded bg-border/70" />
-              <div className="h-4 w-9/12 animate-pulse rounded bg-border/70" />
-              <div className="h-4 w-10/12 animate-pulse rounded bg-border/70" />
-            </div>
-          )}
-        </section>
+              <section className="mt-12" aria-labelledby={`answer-heading-${index}`}>
+                <div className="mb-4 flex items-center gap-3">
+                  <h2 id={`answer-heading-${index}`} className="text-sm font-semibold tracking-wide text-muted uppercase">
+                    Answer
+                  </h2>
+                  {isLatest && busy && <span className="size-2 animate-pulse rounded-full bg-accent" />}
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+                {turn.error ? (
+                  <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                    {turn.error}
+                  </div>
+                ) : turn.answer ? (
+                  <Answer text={turn.answer} sources={turn.sources} />
+                ) : (
+                  <div className="space-y-3" aria-label="Loading answer">
+                    <div className="h-4 w-11/12 animate-pulse rounded bg-border/70" />
+                    <div className="h-4 w-9/12 animate-pulse rounded bg-border/70" />
+                    <div className="h-4 w-10/12 animate-pulse rounded bg-border/70" />
+                  </div>
+                )}
+                {isLatest && !busy && !turn.error && turn.related.length > 0 && (
+                  <div className="mt-10">
+                    <h3 className="mb-3 text-sm font-semibold tracking-wide text-muted uppercase">Related</h3>
+                    <div className="flex flex-col items-start gap-2">
+                      {turn.related.map((related) => (
+                        <button
+                          key={related}
+                          type="button"
+                          onClick={() => ask(related)}
+                          className="text-left text-sm text-accent transition hover:underline"
+                        >
+                          {related} <span aria-hidden="true">→</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            </article>
+          );
+        })}
       </main>
 
       <div className="fixed right-0 bottom-0 left-0 z-10 border-t bg-background/90 px-5 py-4 backdrop-blur">
-        <div className="mx-auto max-w-4xl">
-          <SearchBox value={input} onChange={setInput} onSubmit={() => ask()} disabled={busy} />
+        <div className="mx-auto w-full max-w-3xl">
+          <SearchBox
+            value={input}
+            onChange={setInput}
+            onSubmit={() => ask()}
+            onStop={stop}
+            disabled={busy}
+            busy={busy}
+          />
         </div>
       </div>
     </div>

@@ -6,14 +6,18 @@ type SearchBoxProps = {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onStop?: () => void;
   disabled?: boolean;
+  busy?: boolean;
 };
 
 export default function SearchBox({
   value,
   onChange,
   onSubmit,
+  onStop,
   disabled = false,
+  busy = false,
 }: SearchBoxProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -51,12 +55,13 @@ export default function SearchBox({
         className="min-h-16 w-full resize-none overflow-hidden rounded-2xl border bg-surface py-5 pr-16 pl-5 text-base leading-6 text-foreground shadow-[0_12px_30px_rgba(16,58,52,0.07)] outline-none transition placeholder:text-muted focus:border-accent focus:ring-4 focus:ring-accent/10 disabled:opacity-60"
       />
       <button
-        type="submit"
-        disabled={disabled || !value.trim()}
-        aria-label="Send question"
+        type={busy ? "button" : "submit"}
+        onClick={busy ? onStop : undefined}
+        disabled={busy ? false : disabled || !value.trim()}
+        aria-label={busy ? "Stop answer" : "Send question"}
         className="absolute right-3 bottom-3 grid size-10 place-items-center rounded-full bg-accent text-lg text-white transition hover:scale-105 hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:scale-100 dark:text-[#10201d]"
       >
-        →
+        {busy ? "■" : "→"}
       </button>
     </form>
   );
