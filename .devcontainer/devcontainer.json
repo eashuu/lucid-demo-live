@@ -1,0 +1,17 @@
+{
+  "name": "Lucid workshop",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "postCreateCommand": "npm install",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "Lucid", "onAutoForward": "openBrowser" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["GitHub.copilot", "GitHub.copilot-chat"]
+    },
+    "codespaces": {
+      "openFiles": ["README.md"]
+    }
+  }
+}
